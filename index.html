@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Phaser 3 - Base con plataformas, "dude", puntuación, estrellas y bombas</title>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
+  <style>
+    html,body,#game {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+    }
+    canvas { display:block; }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+
+<script>
+class SceneBase extends Phaser.Scene {
+  preload() {
+    // Spritesheet del jugador
+    this.load.spritesheet('dude', 'https://labs.phaser.io/assets/sprites/dude.png', {
+      frameWidth: 32, frameHeight: 48
+    });
+
+    // Sprites oficiales de Phaser 3
+    this.load.image('star', 'https://labs.phaser.io/assets/sprites/star.png');
+    this.load.image('bomb', 'https://labs.phaser.io/assets/sprites/bomb.png');
+  }
+
+  create() {
+    // Animaciones del "dude"
+    this.anims.create({
+      key: 'left',
+      frames: this.anims.generateFrameNumbers('dude', { start: 0, end: 3 }),
+      frameRate: 10,
+      repeat: -1
+    });
+    this.anims.create({
+      key: 'turn',
+      frames: [ { key: 'dude', frame: 4 } ],
+      frameRate: 20
+    });
+    this.anims.create({
+      key: 'right',
+      frames: this.anims.generateFrameNumbers('dude', { start: 5, end: 8 }),
+      frameRate: 10,
+      repeat: -1
+    });
+
+    // textura 1x1 para plataformas
+    const gen = this.make.graphics({ x:0, y:0, add:false });
+    gen.fillStyle(0x00ff00, 1);
+    gen.fillRect(0,0,1,1);
+    gen.generateTexture('pixel', 1, 1);
+    gen.destroy();
+
+    // grupo plataformas
+    this.platforms = this.physics.add.staticGroup();
+
+    // jugador
+    this.player = this.physics.add.sprite(100, 100, 'dude')
+      .setBounce(0.1)
+      .setCollideWorldBounds(true)
+      .setDepth(2);
+
+    // controles
+    this.cursors = this.input.keyboard.createCursorKeys();
+
+    // fondo gráfico
+    this.bg = this.add.graphics().setDepth(0);
+
+    // collider inicial
+    this.playerPlatformCollider = null;
+
+    // dibujar escena
+    this.drawScene();
+    this.scale.on('resize', this.drawScene, this);
+
+    // estrellas ⭐
+    this.stars = this.physics.add.group({
+      key: 'star',
+      repeat: 11,
+      setXY: { x: 12, y: 0, stepX: 70 }
+    });
+
+    this.stars.children.iterate(child => {
+      child.setBounceY(Phaser.Math.FloatBetween(0.4, 0.8));
+      child.setScale(0.5); // ⭐ más pequeñas
+    });
+
+    // bombas 💣
+    this.bombs = this.physics.add.group();
+
+    // colisiones
+    this.physics.add.collider(this.stars, this.platforms);
+    this.physics.add.collider(this.bombs, this.platforms);
+    this.physics.add.overlap(this.player, this.stars, this.collectStar, null, this);
+    this.physics.add.collider(this.player, this.bombs, this.hitBomb, null, this);
+
+    // puntuación
+    this.score = 0;
+    this.scoreText = this.add.text(16, 16, 'Puntuación: ' + this.score, {
+      fontSize: '24px',
+      fill: '#fff'
+    }).setScrollFactor(0).setDepth(3);
+  }
+
+  drawScene() {
+    const w = this.scale.width || window.innerWidth;
+    const h = this.scale.height || window.innerHeight;
+
+    this.physics.world.setBounds(0,0,w,h);
+    if (this.cameras.main) this.cameras.main.setBounds(0,0,w,h);
+
+    // fondo degradado
+    this.bg.clear();
+    const bands = [
+      0x1a95d1, 0x239dd5, 0x31a6d9, 0x44b0de,
+      0x57bae3, 0x69c3e8, 0x7bcded, 0x8fd6f1,
+      0xa3def5, 0xb7e6f9
+    ];
+    const bandH = h / bands.length;
+    for (let i = 0; i < bands.length; i++) {
+      this.bg.fillStyle(bands[i], 1);
+      this.bg.fillRect(0, i * bandH, w, bandH + 1);
+    }
+
+    if (this.playerPlatformCollider) {
+      this.playerPlatformCollider.destroy();
+      this.playerPlatformCollider = null;
+    }
+    this.platforms.clear(true, true);
+
+    const thickness = Math.max(12, Math.round(h * 0.03));
+
+    const createPlatform = (x, y, widthPx, heightPx, originX=0.5, originY=0.5) => {
+      const p = this.platforms.create(x, y, 'pixel')
+        .setOrigin(originX, originY)
+        .setDisplaySize(widthPx, heightPx)
+        .setDepth(1);
+      p.refreshBody();
+      return p;
+    };
+
+    // posiciones de plataformas
+    createPlatform(w * 0.02, h * 0.38, w * 0.32, thickness, 0, 0.5);
+    createPlatform(w * 0.62, h * 0.28, w * 0.34, thickness, 0, 0.5);
+    createPlatform(w * 0.50, h * 0.65, w * 0.48, thickness, 0.5, 0.5);
+    createPlatform(w * 0.5, h * 0.94, w, Math.max(40, h * 0.12), 0.5, 0.5);
+
+    this.playerPlatformCollider = this.physics.add.collider(this.player, this.platforms);
+
+    if (this.player.x > w - 10 || this.player.y > h - 10) {
+      this.player.setPosition(Math.min(this.player.x, w * 0.1), Math.min(this.player.y, h * 0.2));
+    }
+  }
+
+  update() {
+    if (this.cursors.left.isDown) {
+      this.player.setVelocityX(-200);
+      this.player.anims.play('left', true);
+    } else if (this.cursors.right.isDown) {
+      this.player.setVelocityX(200);
+      this.player.anims.play('right', true);
+    } else {
+      this.player.setVelocityX(0);
+      this.player.anims.play('turn');
+    }
+
+    const body = this.player.body;
+    const onGround = body.blocked.down || body.touching.down;
+    if (this.cursors.up.isDown && onGround) {
+      this.player.setVelocityY(-600);
+    }
+  }
+
+  collectStar(player, star) {
+    star.disableBody(true, true);
+
+    this.score += 10;
+    this.scoreText.setText('Puntuación: ' + this.score);
+
+    if (this.stars.countActive(true) === 0) {
+      this.stars.children.iterate(child => {
+        child.enableBody(true, child.x, 0, true, true);
+        child.setScale(0.5);
+      });
+
+      const x = (this.player.x < this.scale.width/2)
+        ? Phaser.Math.Between(this.scale.width/2, this.scale.width)
+        : Phaser.Math.Between(0, this.scale.width/2);
+
+      const bomb = this.bombs.create(x, 16, 'bomb');
+      bomb.setBounce(1);
+      bomb.setCollideWorldBounds(true);
+      bomb.setVelocity(Phaser.Math.Between(-200, 200), 20);
+    }
+  }
+
+  hitBomb(player, bomb) {
+    this.physics.pause();
+    player.setTint(0xff0000);
+    player.anims.play('turn');
+    this.gameOver = true;
+  }
+}
+
+const config = {
+  type: Phaser.CANVAS,
+  parent: 'game',
+  backgroundColor: '#8fd6f1',
+  scale: {
+    mode: Phaser.Scale.RESIZE,
+    autoCenter: Phaser.Scale.CENTER_BOTH
+  },
+  physics: {
+    default: 'arcade',
+    arcade: {
+      gravity: { y: 600 },
+      debug: false
+    }
+  },
+  scene: [ SceneBase ]
+};
+
+new Phaser.Game(config);
+</script>
+</body>
+</html>
